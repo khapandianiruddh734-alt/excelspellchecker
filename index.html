@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Animaster Suite – Spell Check & Duplicate Tools</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      padding: 20px;
+    }
+
+    h2 {
+      margin-bottom: 10px;
+    }
+
+    textarea, select, input, button {
+      width: 100%;
+      margin: 8px 0;
+      padding: 10px;
+    }
+
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    button:hover {
+      background: #1e40af;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+      background: #fff;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      font-size: 14px;
+    }
+
+    th {
+      background: #f0f0f0;
+    }
+
+    .highlight {
+      background-color: #fff3a0;
+      font-weight: 600;
+    }
+
+    .before {
+      color: #777;
+      font-size: 12px;
+    }
+
+    .box {
+      background: #fff;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Animaster Suite – Spell Checker</h2>
+
+  <div class="box">
+    <input type="file" accept=".csv,.xlsx" onchange="handleFile(this.files[0])" />
+
+    <select id="language">
+      <option value="en-US">English</option>
+      <option value="de-DE">German</option>
+    </select>
+
+    <div id="columnSelector"></div>
+
+    <button onclick="startSpellCheck()">Run Spell Check</button>
+  </div>
+
+  <div class="box">
+    <h3>Preview (Before → After)</h3>
+    <table id="previewTable"></table>
+    <button onclick="downloadFinal()">Download Final CSV</button>
+  </div>
+
+<script>
+/* ---------------- CONFIG ---------------- */
+const FOOD_DICTIONARY = [
+  "paneer","biryani","masala","tandoori",
+  "naan","roti","lassi","chaat",
+  "samosa","idli","dosa","upma"
+];
+
+/* ---------------- STATE ---------------- */
+let tableData = [];
+let originalTableData = [];
+let selectedColumns = [];
+
+/* ---------------- HELPERS ---------------- */
+function deepCopy(data) {
+  return JSON.parse(JSON.stringify(data));
+}
+
+function protectFoodWords(text) {
+  FOOD_DICTIONARY.forEach(w => {
+    const r = new RegExp(`\\b${w}\\b`, "gi");
+    text = text.replace(r, w.toUpperCase());
+  });
+  return text;
+}
+
+function restoreFoodWords(text) {
+  FOOD_DICTIONARY.forEach(w => {
+    const r = new RegExp(`\\b${w.toUpperCase()}\\b`, "g");
+    text = text.replace(r, w);
+  });
+  return text;
+}
+
+function highlightChanges(before, after) {
+  if (!before || before === after) return after;
+
+  const bw = before.split(" ");
+  return after.split(" ").map(w =>
+    bw.includes(w) ? w : `<span class="highlight">${w}</span>`
+  ).join(" ");
+}
+
+/* ---------------- FILE HANDLING ---------------- */
+function handleFile(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+
+  if (ext === "csv") {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: res => {
+        tableData = res.data;
+        originalTableData = deepCopy(tableData);
+        renderColumnSelector(Object.keys(tableData[0]));
+      }
+    });
+  }
+
+  if (ext === "xlsx") {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const wb = XLSX.read(e.target.result, { type: "binary" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      tableData = XLSX.utils.sheet_to_json(sheet);
+      originalTableData = deepCopy(tableData);
+      renderColumnSelector(Object.keys(tableData[0]));
+    };
+    reader.readAsBinaryString(file);
+  }
+}
+
+/* ---------------- UI ---------------- */
+function renderColumnSelector(headers) {
+  const div = document.getElementById("columnSelector");
+  div.innerHTML = "<h4>Select columns</h4>";
+
+  headers.forEach(h => {
+    div.innerHTML += `
+      <label>
+        <input type="checkbox" value="${h}" checked /> ${h}
+      </label><br>
+    `;
+  });
+}
+
+/* ---------------- SPELL CHECK ---------------- */
+async function spellCheck(text, language) {
+  const res = await fetch("https://api.languagetool.org/v2/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ text, language })
+  });
+
+  const data = await res.json();
+  let corrected = text;
+
+  data.matches.reverse().forEach(m => {
+    if (m.replacements.length > 0) {
+      corrected =
+        corrected.slice(0, m.offset) +
+        m.replacements[0].value +
+        corrected.slice(m.offset + m.length);
+    }
+  });
+
+  return corrected;
+}
+
+async function startSpellCheck() {
+  selectedColumns = [...document.querySelectorAll("#columnSelector input:checked")]
+    .map(cb => cb.value);
+
+  const lang = document.getElementById("language").value;
+
+  for (let row of tableData) {
+    for (let col of selectedColumns) {
+      if (row[col]) {
+        let text = protectFoodWords(row[col].toString());
+        text = await spellCheck(text, lang);
+        row[col] = restoreFoodWords(text);
+      }
+    }
+  }
+
+  renderPreview();
+}
+
+/* ---------------- PREVIEW ---------------- */
+function renderPreview() {
+  const table = document.getElementById("previewTable");
+  table.innerHTML = "";
+
+  const headers = Object.keys(tableData[0]);
+  table.innerHTML += `<tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr>`;
+
+  tableData.slice(0, 10).forEach((row, i) => {
+    table.innerHTML += `
+      <tr>
+        ${headers.map(h => {
+          if (selectedColumns.includes(h)) {
+            const before = originalTableData[i][h] || "";
+            const after = row[h] || "";
+            if (before !== after) {
+              return `
+                <td>
+                  <div class="before">${before}</div>
+                  <div>${highlightChanges(before, after)}</div>
+                </td>
+              `;
+            }
+          }
+          return `<td>${row[h] || ""}</td>`;
+        }).join("")}
+      </tr>
+    `;
+  });
+}
+
+/* ---------------- DOWNLOAD ---------------- */
+function downloadFinal() {
+  const csv = Papa.unparse(tableData);
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "spell_checked_items.csv";
+  a.click();
+}
+</script>
+
+</body>
+</html>
