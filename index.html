@@ -185,11 +185,33 @@ function renderColumnSelector(headers) {
 
 /* ---------------- SPELL CHECK ---------------- */
 async function spellCheck(text, language) {
-  const res = await fetch("https://api.languagetool.org/v2/check", {
+  const response = await fetch("/api/spell", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ text, language })
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      text: text,
+      language: language
+    })
   });
+
+  const data = await response.json();
+  let corrected = text;
+
+  if (!data.matches) return text;
+
+  data.matches.reverse().forEach(m => {
+    if (m.replacements.length > 0) {
+      corrected =
+        corrected.slice(0, m.offset) +
+        m.replacements[0].value +
+        corrected.slice(m.offset + m.length);
+    }
+  });
+
+  return corrected;
+}
 
   const data = await res.json();
   let corrected = text;
